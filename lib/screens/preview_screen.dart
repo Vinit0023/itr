@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../state/app_state.dart';
+import '../services/storage_service.dart';
+import '../widgets/image_ref_widget.dart';
+import '../theme/app_theme.dart';
 
 class PreviewScreen extends StatefulWidget {
   const PreviewScreen({super.key});
@@ -13,126 +16,7 @@ class _PreviewScreenState extends State<PreviewScreen> {
   final PageController _pageController = PageController();
   int _currentIndex = 0;
   bool _isSaving = false;
-
-  void _showAlbumDialog() {
-    final TextEditingController albumController = TextEditingController();
-    
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          backgroundColor: Theme.of(context).colorScheme.surface,
-          title: const Text('Save to Album'),
-          content: Consumer<AppState>(
-            builder: (context, state, child) {
-              return SizedBox(
-                width: double.maxFinite,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    TextField(
-                      controller: albumController,
-                      decoration: const InputDecoration(
-                        hintText: 'New Album Name',
-                        hintStyle: TextStyle(color: Colors.white54),
-                      ),
-                      style: const TextStyle(color: Colors.white),
-                    ),
-                    if (state.albums.isNotEmpty) ...[
-                      const SizedBox(height: 16),
-                      const Text('Or select existing:', style: TextStyle(color: Colors.white70)),
-                      const SizedBox(height: 8),
-                      SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: Row(
-                          children: state.albums.map((album) => Padding(
-                            padding: const EdgeInsets.only(right: 8),
-                            child: ActionChip(
-                              label: Text(album),
-                              onPressed: () {
-                                albumController.text = album;
-                              },
-                              backgroundColor: Theme.of(context).colorScheme.primary.withValues(alpha: 0.2),
-                              side: BorderSide.none,
-                            ),
-                          )).toList(),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              );
-            },
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel', style: TextStyle(color: Colors.white70)),
-            ),
-            ElevatedButton(
-              onPressed: () async {
-                if (albumController.text.trim().isNotEmpty) {
-                  await Provider.of<AppState>(context, listen: false).saveToAlbum(albumController.text.trim());
-                  if (context.mounted) {
-                    Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Saved to album "${albumController.text.trim()}"')),
-                    );
-                  }
-                }
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Theme.of(context).colorScheme.primary,
-              ),
-              child: const Text('Save Album'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Future<void> _handleSaveAll() async {
-    if (_isSaving) return;
-    
-    setState(() => _isSaving = true);
-    
-    final state = Provider.of<AppState>(context, listen: false);
-    final success = await state.saveAllToGallery();
-    
-    if (mounted) {
-      setState(() => _isSaving = false);
-      
-      if (success) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Row(
-              children: [
-                Icon(Icons.check_circle, color: Colors.greenAccent, size: 20),
-                SizedBox(width: 8),
-                Text('All images saved to gallery!'),
-              ],
-            ),
-          ),
-        );
-        // Go back to home after saving
-        Navigator.of(context).popUntil((route) => route.isFirst);
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Row(
-              children: [
-                Icon(Icons.error_outline, color: Colors.redAccent, size: 20),
-                SizedBox(width: 8),
-                Text('Failed to save some images'),
-              ],
-            ),
-          ),
-        );
-      }
-    }
-  }
+  bool _isGridView = false;
 
   @override
   void dispose() {
@@ -140,121 +24,301 @@ class _PreviewScreenState extends State<PreviewScreen> {
     super.dispose();
   }
 
+  Future<void> _handleSaveAll(AppState state) async {
+    if (_isSaving) return;
+    setState(() => _isSaving = true);
+
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    final success = await state.saveAllToGallery();
+
+    if (mounted) {
+      setState(() => _isSaving = false);
+      messenger.showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              Icon(
+                success ? Icons.check_circle : Icons.error_outline,
+                color: success ? Colors.greenAccent : Colors.redAccent,
+                size: 18,
+              ),
+              const SizedBox(width: 8),
+              Text(success ? 'Saved to gallery!' : 'Failed to save some images'),
+            ],
+          ),
+        ),
+      );
+      if (success) {
+        navigator.popUntil((r) => r.isFirst);
+      }
+    }
+  }
+
+  void _showAlbumDialog(AppState state) {
+    final ctrl = TextEditingController();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppTheme.bgSurface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(
+          left: 24,
+          right: 24,
+          top: 16,
+          bottom: MediaQuery.of(ctx).viewInsets.bottom + 32,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppTheme.cardBorder,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            Text('Save to Album', style: Theme.of(ctx).textTheme.titleLarge),
+            const SizedBox(height: 16),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              decoration: InputDecoration(
+                hintText: 'Album name (e.g. Products, June Sale)',
+                prefixIcon: Icon(Icons.photo_album_outlined, color: AppTheme.textMuted),
+              ),
+            ),
+            if (state.albums.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Text('Existing albums', style: Theme.of(ctx).textTheme.bodyLarge),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                children: state.albums
+                    .map((a) => ActionChip(
+                          label: Text(a),
+                          onPressed: () => ctrl.text = a,
+                        ))
+                    .toList(),
+              ),
+            ],
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: () async {
+                  if (ctrl.text.trim().isEmpty) return;
+                  final albumName = ctrl.text.trim();
+                  final scaffoldMsg = ScaffoldMessenger.of(context);
+                  await state.saveToAlbum(albumName);
+                  if (ctx.mounted) {
+                    Navigator.pop(ctx);
+                    scaffoldMsg.showSnackBar(
+                      SnackBar(content: Text('Saved to "$albumName"')),
+                    );
+                  }
+                },
+                child: const Text('Save to Album'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Preview Results'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => Navigator.of(context).popUntil((route) => route.isFirst),
-        ),
-      ),
+      backgroundColor: AppTheme.bgDeep,
       body: Consumer<AppState>(
-        builder: (context, state, child) {
+        builder: (context, state, _) {
           if (state.selectedImages.isEmpty) {
-            return const Center(child: Text("No images to preview"));
+            return const Center(child: Text('No images to preview'));
           }
 
           return Column(
             children: [
+              // ── App Bar ──────────────────────────────────────
+              SafeArea(
+                bottom: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  child: Row(
+                    children: [
+                      IconButton(
+                        icon: Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: AppTheme.cardBg,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: AppTheme.cardBorder),
+                          ),
+                          child: const Icon(Icons.home_outlined, size: 18),
+                        ),
+                        onPressed: () =>
+                            Navigator.of(context).popUntil((r) => r.isFirst),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Results',
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                      ),
+                      // Toggle grid / single view
+                      IconButton(
+                        icon: Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: _isGridView
+                                ? AppTheme.crimson.withValues(alpha: 0.2)
+                                : AppTheme.cardBg,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: _isGridView ? AppTheme.crimson : AppTheme.cardBorder,
+                            ),
+                          ),
+                          child: Icon(
+                            _isGridView ? Icons.view_carousel_outlined : Icons.grid_view_rounded,
+                            size: 18,
+                            color: _isGridView ? AppTheme.roseGlow : AppTheme.textSecondary,
+                          ),
+                        ),
+                        onPressed: () => setState(() => _isGridView = !_isGridView),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+              // ── Image View ────────────────────────────────────
               Expanded(
-                child: PageView.builder(
-                  controller: _pageController,
-                  onPageChanged: (index) {
-                    setState(() {
-                      _currentIndex = index;
-                    });
-                  },
-                  itemCount: state.selectedImages.length,
-                  itemBuilder: (context, index) {
-                    final file = state.selectedImages[index];
-                    return Container(
-                      margin: const EdgeInsets.all(24),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(16),
-                        child: InteractiveViewer(
-                          child: Image.file(
-                            file,
-                            fit: BoxFit.contain,
-                            key: ValueKey('preview_${file.path}_${file.lastModifiedSync().millisecondsSinceEpoch}'),
+                child: _isGridView
+                    ? _GridView(
+                        images: state.selectedImages,
+                        onTap: (i) => setState(() {
+                          _isGridView = false;
+                          _currentIndex = i;
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            _pageController.jumpToPage(i);
+                          });
+                        }),
+                      )
+                    : Column(
+                        children: [
+                          Expanded(
+                            child: PageView.builder(
+                              controller: _pageController,
+                              onPageChanged: (i) => setState(() => _currentIndex = i),
+                              itemCount: state.selectedImages.length,
+                              itemBuilder: (context, index) {
+                                final ref = state.selectedImages[index];
+                                return Container(
+                                  margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(20),
+                                    child: InteractiveViewer(
+                                      child: ImageRefWidget(
+                                        ref: ref,
+                                        fit: BoxFit.contain,
+                                        key: ValueKey('prev_${ref.id}'),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                          // Page indicator dots
+                          if (state.selectedImages.length > 1)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: List.generate(
+                                  state.selectedImages.length > 10
+                                      ? 10
+                                      : state.selectedImages.length,
+                                  (i) => AnimatedContainer(
+                                    duration: const Duration(milliseconds: 250),
+                                    margin: const EdgeInsets.symmetric(horizontal: 3),
+                                    width: _currentIndex == i ? 20 : 6,
+                                    height: 6,
+                                    decoration: BoxDecoration(
+                                      color: _currentIndex == i
+                                          ? AppTheme.crimson
+                                          : AppTheme.cardBorder,
+                                      borderRadius: BorderRadius.circular(3),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            )
+                          else
+                            const SizedBox(height: 12),
+                          Text(
+                            '${_currentIndex + 1} of ${state.selectedImages.length}',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+                      ),
+              ),
+
+              // ── Action Bar ────────────────────────────────────
+              Container(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                decoration: BoxDecoration(
+                  color: AppTheme.bgSurface,
+                  border: Border(top: BorderSide(color: AppTheme.cardBorder)),
+                ),
+                child: SafeArea(
+                  top: false,
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.photo_album_outlined, size: 18),
+                          label: const Text('Save to Album'),
+                          onPressed: () => _showAlbumDialog(state),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 14),
                           ),
                         ),
                       ),
-                    );
-                  },
-                ),
-              ),
-              
-              // Page indicator
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Text(
-                  '${_currentIndex + 1} / ${state.selectedImages.length}',
-                  style: const TextStyle(color: Colors.white54, fontSize: 14),
-                ),
-              ),
-              
-              // Dots Indicator
-              if (state.selectedImages.length > 1 && state.selectedImages.length <= 10)
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: List.generate(
-                    state.selectedImages.length,
-                    (index) => Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 4),
-                      width: _currentIndex == index ? 24 : 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        color: _currentIndex == index ? Theme.of(context).colorScheme.primary : Colors.white24,
-                        borderRadius: BorderRadius.circular(4),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          icon: _isSaving
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Icon(Icons.save_alt, size: 18),
+                          label: Text(_isSaving ? 'Saving...' : 'Save to Gallery'),
+                          onPressed: _isSaving ? null : () => _handleSaveAll(state),
+                          style: ElevatedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                        ),
                       ),
-                    ),
+                    ],
                   ),
                 ),
-              
-              const SizedBox(height: 16),
-              
-              // Action Buttons
-              Padding(
-                padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        icon: _isSaving
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70),
-                              )
-                            : const Icon(Icons.save_alt),
-                        label: Text(_isSaving ? 'Saving...' : 'Save to Gallery'),
-                        onPressed: _isSaving ? null : _handleSaveAll,
-                        style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          side: BorderSide(color: Theme.of(context).colorScheme.primary),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: ElevatedButton.icon(
-                        icon: const Icon(Icons.photo_album),
-                        label: const Text('Create Album'),
-                        onPressed: _showAlbumDialog,
-                        style: ElevatedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          backgroundColor: Theme.of(context).colorScheme.primary,
-                          foregroundColor: Colors.white,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
               ),
-              const SizedBox(height: 16),
             ],
           );
         },
@@ -262,3 +326,76 @@ class _PreviewScreenState extends State<PreviewScreen> {
     );
   }
 }
+
+class _GridView extends StatelessWidget {
+  final List<ImageRef> images;
+  final void Function(int) onTap;
+
+  const _GridView({required this.images, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return GridView.builder(
+      padding: const EdgeInsets.all(16),
+      physics: const BouncingScrollPhysics(),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        crossAxisSpacing: 10,
+        mainAxisSpacing: 10,
+        childAspectRatio: 0.9,
+      ),
+      itemCount: images.length,
+      itemBuilder: (context, index) {
+        final ref = images[index];
+        return GestureDetector(
+          onTap: () => onTap(index),
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: AppTheme.cardBorder),
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(15),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  ImageRefWidget(
+                    ref: ref,
+                    fit: BoxFit.cover,
+                    key: ValueKey('grid_${ref.id}'),
+                  ),
+                  Positioned(
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      decoration: BoxDecoration(
+                        gradient: AppTheme.overlayGradient,
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.check_circle, color: Colors.greenAccent, size: 14),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Image ${index + 1}',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+

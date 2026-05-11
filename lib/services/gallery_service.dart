@@ -1,25 +1,44 @@
-import 'dart:io';
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:file_picker/file_picker.dart';
+
+/// Unified image model — works on web and mobile.
+/// On mobile: [path] is set.
+/// On web:    [bytes] and [name] are set.
+class PickedImage {
+  final String? path;
+  final Uint8List? bytes;
+  final String name;
+
+  const PickedImage({this.path, this.bytes, required this.name});
+
+  bool get isValid => kIsWeb ? bytes != null : path != null;
+}
 
 class GalleryService {
   static final GalleryService _instance = GalleryService._internal();
   factory GalleryService() => _instance;
   GalleryService._internal();
 
-  /// Pick multiple images using the file picker
-  Future<List<File>> pickImages() async {
+  Future<List<PickedImage>> pickImages() async {
     try {
-      FilePickerResult? result = await FilePicker.platform.pickFiles(
+      final result = await FilePicker.platform.pickFiles(
         type: FileType.image,
         allowMultiple: true,
+        withData: kIsWeb, // web needs in-memory bytes
       );
+      if (result == null) return [];
 
-      if (result != null) {
-        return result.paths.where((path) => path != null).map((path) => File(path!)).toList();
-      }
-    } catch (e) {
-      // Handle error
+      return result.files
+          .where((f) => kIsWeb ? f.bytes != null : f.path != null)
+          .map((f) => PickedImage(
+                path: f.path,
+                bytes: f.bytes,
+                name: f.name,
+              ))
+          .toList();
+    } catch (_) {
+      return [];
     }
-    return [];
   }
 }

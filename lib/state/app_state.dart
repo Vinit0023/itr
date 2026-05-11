@@ -1,6 +1,5 @@
-import 'dart:io';
-import 'package:flutter/material.dart';
-import 'package:image_gallery_saver_plus/image_gallery_saver_plus.dart';
+import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart' show kIsWeb, ChangeNotifier, debugPrint;
 import '../services/storage_service.dart';
 import '../services/share_service.dart';
 import '../services/image_processor.dart';
@@ -8,196 +7,177 @@ import '../services/gallery_service.dart';
 import '../services/text_recognizer_service.dart';
 
 class AppState extends ChangeNotifier {
-  final _storageService = StorageService();
-  final _shareService = ShareService();
+  final _storage        = StorageService();
+  final _shareService   = ShareService();
   final _imageProcessor = ImageProcessor();
   final _galleryService = GalleryService();
   final _textRecognizer = TextRecognizerService();
 
-  List<File> _receivedImages = [];
-  List<File> _processedImages = [];
-  List<File> _selectedImages = [];
-  List<String> _albums = [];
-  
-  bool _isLoading = false;
+  final List<ImageRef> _receivedImages  = [];
+  List<ImageRef> _processedImages = [];
+  List<ImageRef> _selectedImages  = [];
+  List<String>   _albums          = [];
+
+  bool   _isLoading       = false;
   double _processProgress = 0.0;
 
-  List<File> get receivedImages => _receivedImages;
-  List<File> get processedImages => _processedImages;
-  List<File> get selectedImages => _selectedImages;
-  List<String> get albums => _albums;
-  
-  bool get isLoading => _isLoading;
-  double get processProgress => _processProgress;
+  List<ImageRef> get receivedImages  => _receivedImages;
+  List<ImageRef> get processedImages => _processedImages;
+  List<ImageRef> get selectedImages  => _selectedImages;
+  List<String>   get albums          => _albums;
+  bool           get isLoading       => _isLoading;
+  double         get processProgress => _processProgress;
 
-  AppState() {
-    _init();
-  }
+  AppState() { _init(); }
 
   Future<void> _init() async {
-    _shareService.init();
-    _shareService.onImagesReceived = (files) {
-      _receivedImages.insertAll(0, files);
+    _shareService.onImagesReceived = (refs) {
+      _receivedImages.insertAll(0, refs);
       notifyListeners();
     };
-    await loadData();
-  }
-
-  Future<void> loadData() async {
-    _isLoading = true;
-    notifyListeners();
-    _receivedImages = await _storageService.getReceivedImages();
-    _processedImages = await _storageService.getProcessedImages();
-    _albums = await _storageService.getAlbums();
-    _isLoading = false;
+    _shareService.init();
+    _processedImages = _storage.getProcessedImages();
+    _albums = _storage.getAlbums();
     notifyListeners();
   }
 
-  void toggleSelection(File image) {
-    if (_selectedImages.contains(image)) {
-      _selectedImages.remove(image);
+  void toggleImageSelection(ImageRef ref) {
+    if (_selectedImages.contains(ref)) {
+      _selectedImages.remove(ref);
     } else {
-      _selectedImages.add(image);
+      _selectedImages.add(ref);
     }
     notifyListeners();
   }
-  
-  void clearSelection() {
-    _selectedImages.clear();
-    notifyListeners();
-  }
-  
+
+  // Alias for toggleImageSelection
+  void toggleSelection(ImageRef ref) => toggleImageSelection(ref);
+
   void selectAllRecent() {
     _selectedImages = List.from(_receivedImages);
     notifyListeners();
   }
 
-  Future<void> pickFromGallery() async {
-    final images = await _galleryService.pickImages();
-    if (images.isNotEmpty) {
-      _selectedImages.addAll(images);
-      notifyListeners();
-    }
+  void clearSelection() {
+    _selectedImages.clear();
+    notifyListeners();
   }
 
-  Future<List<File>> batchProcess({List<EraseRegion> regions = const [], List<ErasePath> paths = const []}) async {
-    if (_selectedImages.isEmpty || (regions.isEmpty && paths.isEmpty)) return [];
-    
-    _isLoading = true;
-    _processProgress = 0.0;
-    notifyListeners();
-    
-    final results = await _imageProcessor.batchErase(
-      _selectedImages,
-      regions: regions,
-      paths: paths,
-      onProgress: (progress) {
-        _processProgress = progress;
-        notifyListeners();
+  Future<void> pickImages() async {
+    final picked = await _galleryService.pickImages();
+    if (picked.isEmpty) return;
+
+    for (final p in picked) {
+      final ref = await _storage.createProcessedRef(p.name);
+      if (p.bytes != null) {
+        await _storage.writeBytes(ref, p.bytes!);
+        // Chrome fix: bytes ko direct ref mein update karein
+        _selectedImages.add(ImageRef(
+          id: ref.id,
+          name: ref.name,
+          path: ref.path,
+          bytes: p.bytes,
+        ));
       }
-    );
-    
-    _processedImages.insertAll(0, results);
-    _selectedImages = List.from(results);
-    
-    _isLoading = false;
-    _processProgress = 1.0;
+    }
     notifyListeners();
-    
-    return results;
   }
 
-  /// Automatically find and erase specific text from all selected images
-  Future<List<File>> autoSearchAndErase(String searchText) async {
+  // Alias for pickImages
+  Future<void> pickFromGallery() => pickImages();
+
+  // --- FIX FOR TEST CASE 2 & ERASE DISPLAY ---
+  Future<List<ImageRef>> batchErase(String searchText) async {
     if (_selectedImages.isEmpty || searchText.trim().isEmpty) return [];
 
     _isLoading = true;
     _processProgress = 0.0;
     notifyListeners();
 
-    List<File> finalResults = [];
-    
-    for (int i = 0; i < _selectedImages.length; i++) {
-      final imgFile = _selectedImages[i];
-      
-      // Step 1: Find text regions using ML Kit
-      final foundBoxes = await _textRecognizer.findTextRegions(imgFile, searchText);
-      
-      if (foundBoxes.isNotEmpty) {
-        // Convert to EraseRegion
-        final regions = foundBoxes.map((b) => EraseRegion(
-          xPercent: b['xPercent']!,
-          yPercent: b['yPercent']!,
-          wPercent: b['wPercent']!,
-          hPercent: b['hPercent']!,
-        )).toList();
+    try {
+      final List<ImageRef> finalResults = [];
 
-        // Step 2: Erase just for this image
-        final result = await _imageProcessor.batchErase([imgFile], regions: regions);
-        finalResults.addAll(result);
-      } else {
-        // Text not found, return original image
-        finalResults.add(imgFile);
+      for (int i = 0; i < _selectedImages.length; i++) {
+        final ref = _selectedImages[i];
+        if (ref.bytes == null) continue;
+
+        final ui.Image decoded = await ui.instantiateImageCodec(ref.bytes!)
+            .then((c) => c.getNextFrame().then((f) => f.image));
+
+        final regions = await _textRecognizer.findTextRegions(
+          kIsWeb ? ref : ref.path,
+          ref.bytes!,
+          searchText,
+          decoded.width,
+          decoded.height,
+        );
+
+        if (regions.isNotEmpty) {
+          final processed = await _imageProcessor.batchErase(
+            [ref],
+            regions: regions.map((r) => EraseRegion(
+              xPercent: r['xPercent']!,
+              yPercent: r['yPercent']!,
+              wPercent: r['wPercent']!,
+              hPercent: r['hPercent']!,
+            )).toList(),
+          );
+          finalResults.addAll(processed);
+        } else {
+          finalResults.add(ref);
+        }
+
+        _processProgress = (i + 1) / _selectedImages.length;
+        notifyListeners();
       }
 
-      _processProgress = (i + 1) / _selectedImages.length;
+      // Important: Save to storage and update UI list
+      for (var res in finalResults) { _storage.addProcessed(res); }
+      _processedImages = finalResults; 
+      _selectedImages = List.from(finalResults);
+      
+      return finalResults;
+    } catch (e) {
+      debugPrint("Batch Erase Error: $e");
+      return _selectedImages;
+    } finally {
+      _isLoading = false;
       notifyListeners();
     }
-
-    _processedImages.insertAll(0, finalResults);
-    _selectedImages = List.from(finalResults);
-    
-    _isLoading = false;
-    _processProgress = 1.0;
-    notifyListeners();
-
-    return finalResults;
   }
 
+  // Alias for batchErase
+  Future<List<ImageRef>> autoSearchAndErase(String searchText) => batchErase(searchText);
 
-  
   Future<void> saveToAlbum(String albumName) async {
     if (_selectedImages.isEmpty) return;
-    await _storageService.saveToAlbum(albumName, _selectedImages);
-    _albums = await _storageService.getAlbums();
+    await _storage.saveToAlbum(albumName, _selectedImages);
+    _albums = _storage.getAlbums();
+    notifyListeners();
+  }
+
+  List<ImageRef> getAlbumImages(String albumName) => _storage.getAlbumImages(albumName);
+
+  Future<void> deleteAlbum(String albumName) async {
+    await _storage.deleteAlbum(albumName);
+    _albums = _storage.getAlbums();
     notifyListeners();
   }
 
   Future<bool> saveAllToGallery() async {
     if (_selectedImages.isEmpty) return false;
-
-    try {
-      for (final file in _selectedImages) {
-        if (await file.exists()) {
-          await ImageGallerySaverPlus.saveFile(file.path);
-        }
-      }
-      return true;
-    } catch (e) {
-      debugPrint("Error saving to gallery: $e");
-      return false;
-    }
+    return _storage.saveToGallery(_selectedImages);
   }
 
-  Future<List<File>> getAlbumImages(String albumName) async {
-    return await _storageService.getAlbumImages(albumName);
-  }
-
-  Future<void> deleteProcessedImage(File file) async {
-    await _storageService.deleteProcessedImage(file);
-    _processedImages.remove(file);
+  void deleteProcessedImage(ImageRef ref) {
+    _storage.deleteProcessed(ref);
+    _processedImages = _storage.getProcessedImages();
     notifyListeners();
   }
 
   Future<void> clearAllProcessed() async {
-    await _storageService.clearAllProcessed();
-    _processedImages.clear();
-    notifyListeners();
-  }
-
-  Future<void> deleteAlbum(String albumName) async {
-    await _storageService.deleteAlbum(albumName);
-    _albums.remove(albumName);
+    _storage.clearAllProcessed();
+    _processedImages = [];
     notifyListeners();
   }
 

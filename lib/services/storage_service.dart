@@ -1,7 +1,52 @@
-import 'dart:io';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+import 'dart:convert';
+import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
+
+// Mobile-only imports — guarded
+import 'storage_service_mobile.dart'
+    if (dart.library.html) 'storage_service_web.dart' as platform;
+
+/// A unified image reference — on web we store bytes in memory,
+/// on mobile we hold the file path.
+class ImageRef {
+  final String id;
+  final String? path;       // mobile
+  final Uint8List? bytes;   // web
+  final String name;
+  final DateTime createdAt;
+
+  ImageRef({
+    required this.id,
+    this.path,
+    this.bytes,
+    required this.name,
+    DateTime? createdAt,
+  }) : createdAt = createdAt ?? DateTime.now();
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'path': path,
+        'name': name,
+        'createdAt': createdAt.toIso8601String(),
+      };
+
+  factory ImageRef.fromJson(Map<String, dynamic> j) => ImageRef(
+        id: j['id'],
+        path: j['path'],
+        name: j['name'],
+        createdAt: DateTime.parse(j['createdAt']),
+      );
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ImageRef && runtimeType == other.runtimeType && id == other.id;
+
+  @override
+  int get hashCode => id.hashCode;
+}
 
 class StorageService {
   static final StorageService _instance = StorageService._internal();
@@ -10,140 +55,107 @@ class StorageService {
 
   final _uuid = const Uuid();
 
-  Future<Directory> get _appDir async {
-    final dir = await getApplicationDocumentsDirectory();
-    final itrDir = Directory(p.join(dir.path, 'ITR'));
-    if (!await itrDir.exists()) {
-      await itrDir.create(recursive: true);
-    }
-    return itrDir;
-  }
+  // ── In-memory store (web primary, mobile fallback for current session) ──
+  final Map<String, Uint8List> _memoryStore = {};
 
-  Future<Directory> get _receivedDir async {
-    final dir = await _appDir;
-    final received = Directory(p.join(dir.path, 'received'));
-    if (!await received.exists()) {
-      await received.create(recursive: true);
-    }
-    return received;
-  }
+  // ── Processed images list ─────────────────────────────────────
+  final List<ImageRef> _processedRefs = [];
+  // ── Albums ────────────────────────────────────────────────────
+  final Map<String, List<ImageRef>> _albums = {};
 
-  Future<Directory> get _processedDir async {
-    final dir = await _appDir;
-    final processed = Directory(p.join(dir.path, 'processed'));
-    if (!await processed.exists()) {
-      await processed.create(recursive: true);
-    }
-    return processed;
-  }
+  // ── Persist metadata (paths/ids) using shared_preferences ─────
+  Future<SharedPreferences> get _prefs => SharedPreferences.getInstance();
 
-  Future<File> saveReceivedImage(File sourceFile) async {
-    final receivedDir = await _receivedDir;
-    final extension = p.extension(sourceFile.path);
-    final fileName = '${_uuid.v4()}$extension';
-    final targetPath = p.join(receivedDir.path, fileName);
-    return await sourceFile.copy(targetPath);
-  }
-
-  /// Creates a new empty file in the processed directory and returns it.
-  /// The caller is responsible for writing bytes to this file.
-  Future<File> saveProcessedImage(File sourceFile) async {
-    final processedDir = await _processedDir;
-    final fileName = 'processed_${_uuid.v4()}.jpg';
-    final targetPath = p.join(processedDir.path, fileName);
-    return File(targetPath);
-  }
-
-  Future<List<File>> getReceivedImages() async {
-    final dir = await _receivedDir;
-    if (!await dir.exists()) return [];
-    return dir
-        .listSync()
-        .whereType<File>()
-        .where((f) {
-          final ext = p.extension(f.path).toLowerCase();
-          return ['.jpg', '.jpeg', '.png', '.webp', '.bmp'].contains(ext);
-        })
-        .toList()
-      ..sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
-  }
-
-  Future<List<File>> getProcessedImages() async {
-    final dir = await _processedDir;
-    if (!await dir.exists()) return [];
-    return dir
-        .listSync()
-        .whereType<File>()
-        .where((f) {
-          final ext = p.extension(f.path).toLowerCase();
-          return ['.jpg', '.jpeg', '.png', '.webp', '.bmp'].contains(ext);
-        })
-        .toList()
-      ..sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
-  }
-
-  Future<void> saveToAlbum(String albumName, List<File> images) async {
-    final dir = await _appDir;
-    final albumDir = Directory(p.join(dir.path, 'albums', albumName));
-    if (!await albumDir.exists()) {
-      await albumDir.create(recursive: true);
-    }
-    for (var img in images) {
-      final fileName = p.basename(img.path);
-      await img.copy(p.join(albumDir.path, fileName));
+  // ─────────────────────────────────────────────────────────────
+  // Create new processed image slot
+  // ─────────────────────────────────────────────────────────────
+  Future<ImageRef> createProcessedRef(String sourceName) async {
+    final id = _uuid.v4();
+    if (kIsWeb) {
+      return ImageRef(id: id, name: 'processed_$id.jpg');
+    } else {
+      final path = await platform.getProcessedPath(id);
+      return ImageRef(id: id, path: path, name: 'processed_$id.jpg');
     }
   }
 
-  Future<List<String>> getAlbums() async {
-    final dir = await _appDir;
-    final albumsDir = Directory(p.join(dir.path, 'albums'));
-    if (!await albumsDir.exists()) return [];
-    
-    return albumsDir.listSync()
-        .whereType<Directory>()
-        .map((e) => p.basename(e.path))
-        .toList();
-  }
-
-  /// Get all images inside a specific album
-  Future<List<File>> getAlbumImages(String albumName) async {
-    final dir = await _appDir;
-    final albumDir = Directory(p.join(dir.path, 'albums', albumName));
-    if (!await albumDir.exists()) return [];
-    
-    return albumDir
-        .listSync()
-        .whereType<File>()
-        .where((f) {
-          final ext = p.extension(f.path).toLowerCase();
-          return ['.jpg', '.jpeg', '.png', '.webp', '.bmp'].contains(ext);
-        })
-        .toList()
-      ..sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
-  }
-
-  /// Delete a single processed image
-  Future<void> deleteProcessedImage(File file) async {
-    if (await file.exists()) {
-      await file.delete();
+  /// Write bytes to the ref (both web and mobile).
+  Future<void> writeBytes(ImageRef ref, Uint8List bytes) async {
+    if (kIsWeb) {
+      _memoryStore[ref.id] = bytes;
+    } else {
+      await platform.writeFile(ref.path!, bytes);
     }
   }
 
-  /// Clear all processed images
-  Future<void> clearAllProcessed() async {
-    final dir = await _processedDir;
-    final files = dir.listSync().whereType<File>();
-    for (var file in files) {
-      await file.delete();
+  /// Read bytes from the ref.
+  Future<Uint8List?> readBytes(ImageRef ref) async {
+    if (kIsWeb) {
+      return _memoryStore[ref.id];
+    } else {
+      return platform.readFile(ref.path!);
     }
   }
 
-  /// Delete an album
+  // ─────────────────────────────────────────────────────────────
+  // Processed images
+  // ─────────────────────────────────────────────────────────────
+  void addProcessed(ImageRef ref) {
+    _processedRefs.insert(0, ref);
+  }
+
+  List<ImageRef> getProcessedImages() => List.unmodifiable(_processedRefs);
+
+  void deleteProcessed(ImageRef ref) {
+    _processedRefs.remove(ref);
+    _memoryStore.remove(ref.id);
+    if (!kIsWeb && ref.path != null) platform.deleteFile(ref.path!);
+  }
+
+  void clearAllProcessed() {
+    for (final ref in _processedRefs) {
+      _memoryStore.remove(ref.id);
+      if (!kIsWeb && ref.path != null) platform.deleteFile(ref.path!);
+    }
+    _processedRefs.clear();
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Albums
+  // ─────────────────────────────────────────────────────────────
+  List<String> getAlbums() => _albums.keys.toList();
+
+  Future<void> saveToAlbum(String albumName, List<ImageRef> images) async {
+    _albums.putIfAbsent(albumName, () => []).addAll(images);
+    // Persist album names
+    final prefs = await _prefs;
+    await prefs.setString('albums', jsonEncode(_albums.keys.toList()));
+  }
+
+  List<ImageRef> getAlbumImages(String albumName) =>
+      _albums[albumName] ?? [];
+
   Future<void> deleteAlbum(String albumName) async {
-    final dir = await _appDir;
-    final albumDir = Directory(p.join(dir.path, 'albums', albumName));
-    if (await albumDir.exists()) {
-      await albumDir.delete(recursive: true);
+    _albums.remove(albumName);
+    final prefs = await _prefs;
+    await prefs.setString('albums', jsonEncode(_albums.keys.toList()));
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Save to device gallery (mobile only)
+  // ─────────────────────────────────────────────────────────────
+  Future<bool> saveToGallery(List<ImageRef> refs) async {
+    if (kIsWeb) {
+      // Web: trigger browser download for each image
+      for (final ref in refs) {
+        final bytes = _memoryStore[ref.id];
+        if (bytes != null) {
+          platform.triggerDownload(bytes, ref.name);
+        }
+      }
+      return true;
+    } else {
+      return platform.saveToGallery(refs);
     }
   }
 }
