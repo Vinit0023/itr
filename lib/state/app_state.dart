@@ -1,5 +1,7 @@
+import 'dart:typed_data';
 import 'dart:ui' as ui;
-import 'package:flutter/foundation.dart' show kIsWeb, ChangeNotifier, debugPrint;
+import 'package:flutter/foundation.dart'
+    show kIsWeb, ChangeNotifier, debugPrint;
 import '../services/storage_service.dart';
 import '../services/share_service.dart';
 import '../services/image_processor.dart';
@@ -7,28 +9,30 @@ import '../services/gallery_service.dart';
 import '../services/text_recognizer_service.dart';
 
 class AppState extends ChangeNotifier {
-  final _storage        = StorageService();
-  final _shareService   = ShareService();
+  final _storage = StorageService();
+  final _shareService = ShareService();
   final _imageProcessor = ImageProcessor();
   final _galleryService = GalleryService();
   final _textRecognizer = TextRecognizerService();
 
-  final List<ImageRef> _receivedImages  = [];
+  final List<ImageRef> _receivedImages = [];
   List<ImageRef> _processedImages = [];
-  List<ImageRef> _selectedImages  = [];
-  List<String>   _albums          = [];
+  List<ImageRef> _selectedImages = [];
+  List<String> _albums = [];
 
-  bool   _isLoading       = false;
+  bool _isLoading = false;
   double _processProgress = 0.0;
 
-  List<ImageRef> get receivedImages  => _receivedImages;
+  List<ImageRef> get receivedImages => _receivedImages;
   List<ImageRef> get processedImages => _processedImages;
-  List<ImageRef> get selectedImages  => _selectedImages;
-  List<String>   get albums          => _albums;
-  bool           get isLoading       => _isLoading;
-  double         get processProgress => _processProgress;
+  List<ImageRef> get selectedImages => _selectedImages;
+  List<String> get albums => _albums;
+  bool get isLoading => _isLoading;
+  double get processProgress => _processProgress;
 
-  AppState() { _init(); }
+  AppState() {
+    _init();
+  }
 
   Future<void> _init() async {
     _shareService.onImagesReceived = (refs) {
@@ -50,7 +54,6 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Alias for toggleImageSelection
   void toggleSelection(ImageRef ref) => toggleImageSelection(ref);
 
   void selectAllRecent() {
@@ -63,30 +66,51 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // BUG FIX 1 (Chrome — images grid nahi dikhti after picking):
+  //
+  // Pehle: picked images sirf _selectedImages mein add hoti thi.
+  //   SelectImagesScreen ka grid sirf _receivedImages se render hota hai.
+  //   Isliye Chrome pe gallery pick ke baad kuch nahi dikhta tha.
+  //
+  // Fix: dono lists mein add karo — grid mein dikhega + pre-selected bhi hoga.
+  // ─────────────────────────────────────────────────────────────────────────
   Future<void> pickImages() async {
     final picked = await _galleryService.pickImages();
     if (picked.isEmpty) return;
 
     for (final p in picked) {
       final ref = await _storage.createProcessedRef(p.name);
+
+      final imageRef = ImageRef(
+        id: ref.id,
+        name: ref.name,
+        path: ref.path,
+        bytes: p.bytes,
+      );
+
       if (p.bytes != null) {
         await _storage.writeBytes(ref, p.bytes!);
-        // Chrome fix: bytes ko direct ref mein update karein
-        _selectedImages.add(ImageRef(
-          id: ref.id,
-          name: ref.name,
-          path: ref.path,
-          bytes: p.bytes,
-        ));
       }
+
+      // FIX: _receivedImages mein bhi add karo — yahi grid mein dikhta hai
+      _receivedImages.insert(0, imageRef);
+      // Pre-select bhi karo taaki user ko dobara tap na karna pade
+      _selectedImages.add(imageRef);
     }
     notifyListeners();
   }
 
-  // Alias for pickImages
   Future<void> pickFromGallery() => pickImages();
 
-  // --- FIX FOR TEST CASE 2 & ERASE DISPLAY ---
+  // ─────────────────────────────────────────────────────────────────────────
+  // BUG FIX 2 (Phone — Auto Erase pe app crash):
+  //
+  // Pehle: mobile pe ImageRef.bytes == null hota hai (sirf path hota hai).
+  //   Code ref.bytes! use karta tha — null assertion crash deta tha.
+  //
+  // Fix: pehle bytes load karo path se agar memory mein nahi hain.
+  // ─────────────────────────────────────────────────────────────────────────
   Future<List<ImageRef>> batchErase(String searchText) async {
     if (_selectedImages.isEmpty || searchText.trim().isEmpty) return [];
 
@@ -99,28 +123,55 @@ class AppState extends ChangeNotifier {
 
       for (int i = 0; i < _selectedImages.length; i++) {
         final ref = _selectedImages[i];
-        if (ref.bytes == null) continue;
 
-        final ui.Image decoded = await ui.instantiateImageCodec(ref.bytes!)
+        // FIX: mobile pe ref.bytes null hota hai — path se read karo
+        Uint8List? imageBytes = ref.bytes;
+        if (imageBytes == null && ref.path != null) {
+          imageBytes = await _storage.readBytes(ref);
+        }
+
+        if (imageBytes == null) {
+          debugPrint('batchErase: no bytes for ${ref.name}, skipping');
+          finalResults.add(ref);
+          _processProgress = (i + 1) / _selectedImages.length;
+          notifyListeners();
+          continue;
+        }
+
+        // FIX: imageBytes use karo, ref.bytes! nahi — crash avoid
+        final ui.Image decoded = await ui
+            .instantiateImageCodec(imageBytes)
             .then((c) => c.getNextFrame().then((f) => f.image));
 
         final regions = await _textRecognizer.findTextRegions(
           kIsWeb ? ref : ref.path,
-          ref.bytes!,
+          imageBytes,
           searchText,
           decoded.width,
           decoded.height,
         );
 
         if (regions.isNotEmpty) {
+          // FIX: bytes attach karo ref mein taaki processor ke paas data ho
+          final refWithBytes = ImageRef(
+            id: ref.id,
+            name: ref.name,
+            path: ref.path,
+            bytes: imageBytes,
+            createdAt: ref.createdAt,
+          );
           final processed = await _imageProcessor.batchErase(
-            [ref],
-            regions: regions.map((r) => EraseRegion(
-              xPercent: r['xPercent']!,
-              yPercent: r['yPercent']!,
-              wPercent: r['wPercent']!,
-              hPercent: r['hPercent']!,
-            )).toList(),
+            [refWithBytes],
+            regions: regions
+                .map(
+                  (r) => EraseRegion(
+                    xPercent: r['xPercent']!,
+                    yPercent: r['yPercent']!,
+                    wPercent: r['wPercent']!,
+                    hPercent: r['hPercent']!,
+                  ),
+                )
+                .toList(),
           );
           finalResults.addAll(processed);
         } else {
@@ -131,11 +182,12 @@ class AppState extends ChangeNotifier {
         notifyListeners();
       }
 
-      // Important: Save to storage and update UI list
-      for (var res in finalResults) { _storage.addProcessed(res); }
-      _processedImages = finalResults; 
+      for (var res in finalResults) {
+        _storage.addProcessed(res);
+      }
+      _processedImages = finalResults;
       _selectedImages = List.from(finalResults);
-      
+
       return finalResults;
     } catch (e) {
       debugPrint("Batch Erase Error: $e");
@@ -146,8 +198,8 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  // Alias for batchErase
-  Future<List<ImageRef>> autoSearchAndErase(String searchText) => batchErase(searchText);
+  Future<List<ImageRef>> autoSearchAndErase(String searchText) =>
+      batchErase(searchText);
 
   Future<void> saveToAlbum(String albumName) async {
     if (_selectedImages.isEmpty) return;
@@ -156,7 +208,8 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  List<ImageRef> getAlbumImages(String albumName) => _storage.getAlbumImages(albumName);
+  List<ImageRef> getAlbumImages(String albumName) =>
+      _storage.getAlbumImages(albumName);
 
   Future<void> deleteAlbum(String albumName) async {
     await _storage.deleteAlbum(albumName);
