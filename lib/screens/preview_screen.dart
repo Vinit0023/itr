@@ -216,26 +216,59 @@ class _PreviewScreenState extends State<PreviewScreen> {
                     : Column(
                         children: [
                           Expanded(
-                            child: PageView.builder(
-                              controller: _pageController,
-                              onPageChanged: (i) => setState(() => _currentIndex = i),
-                              itemCount: state.selectedImages.length,
-                              itemBuilder: (context, index) {
-                                final ref = state.selectedImages[index];
-                                return Container(
-                                  margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-                                  child: ClipRRect(
-                                    borderRadius: BorderRadius.circular(20),
-                                    child: InteractiveViewer(
-                                      child: ImageRefWidget(
-                                        ref: ref,
-                                        fit: BoxFit.contain,
-                                        key: ValueKey('prev_${ref.id}'),
+                            child: Stack(
+                              children: [
+                                PageView.builder(
+                                  controller: _pageController,
+                                  onPageChanged: (i) => setState(() => _currentIndex = i),
+                                  itemCount: state.selectedImages.length,
+                                  itemBuilder: (context, index) {
+                                    final ref = state.selectedImages[index];
+                                    return Container(
+                                      margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                                      child: ClipRRect(
+                                        borderRadius: BorderRadius.circular(20),
+                                        child: InteractiveViewer(
+                                          child: ImageRefWidget(
+                                            ref: ref,
+                                            fit: BoxFit.contain,
+                                            key: ValueKey('prev_${ref.id}'),
+                                          ),
+                                        ),
                                       ),
+                                    );
+                                  },
+                                ),
+                                // Delete button overlay
+                                Positioned(
+                                  top: 24,
+                                  right: 24,
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      color: Colors.red.withValues(alpha: 0.9),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: IconButton(
+                                      icon: const Icon(Icons.delete_outline, color: Colors.white, size: 20),
+                                      onPressed: () {
+                                        final imageToDelete = state.selectedImages[_currentIndex];
+                                        state.removeImage(imageToDelete);
+                                        
+                                        if (state.selectedImages.isNotEmpty) {
+                                          if (_currentIndex >= state.selectedImages.length) {
+                                            _currentIndex = state.selectedImages.length - 1;
+                                          }
+                                          _pageController.jumpToPage(_currentIndex);
+                                        }
+                                        
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          const SnackBar(content: Text('Image deleted')),
+                                        );
+                                      },
                                     ),
                                   ),
-                                );
-                              },
+                                ),
+                              ],
                             ),
                           ),
                           // Page indicator dots
@@ -283,35 +316,53 @@ class _PreviewScreenState extends State<PreviewScreen> {
                 ),
                 child: SafeArea(
                   top: false,
-                  child: Row(
+                  child: Column(
                     children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          icon: const Icon(Icons.photo_album_outlined, size: 18),
-                          label: const Text('Save to Album'),
-                          onPressed: () => _showAlbumDialog(state),
-                          style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 14),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              icon: const Icon(Icons.photo_album_outlined, size: 18),
+                              label: const Text('Save to Album'),
+                              onPressed: () => _showAlbumDialog(state),
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                              ),
+                            ),
                           ),
-                        ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              icon: _isSaving
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : const Icon(Icons.save_alt, size: 18),
+                              label: Text(_isSaving ? 'Saving...' : 'Save to Gallery'),
+                              onPressed: _isSaving ? null : () => _handleSaveAll(state),
+                              style: ElevatedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          icon: _isSaving
-                              ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.white,
-                                  ),
-                                )
-                              : const Icon(Icons.save_alt, size: 18),
-                          label: Text(_isSaving ? 'Saving...' : 'Save to Gallery'),
-                          onPressed: _isSaving ? null : () => _handleSaveAll(state),
-                          style: ElevatedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 14),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.add_photo_alternate_outlined, size: 18),
+                          label: const Text('Add More Images'),
+                          onPressed: () async {
+                            await state.addMoreImages();
+                          },
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 12),
                           ),
                         ),
                       ),

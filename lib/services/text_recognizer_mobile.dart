@@ -3,9 +3,12 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import '../models/ocr_models.dart';
 
 final _recognizer = TextRecognizer(script: TextRecognitionScript.latin);
 
+/// Find text regions matching search text
+/// Returns percentage-based coordinates
 Future<List<Map<String, double>>> findTextRegions(
   dynamic imageSource,
   Uint8List imageBytes,
@@ -22,8 +25,6 @@ Future<List<Map<String, double>>> findTextRegions(
     if (imageSource is String && imageSource.isNotEmpty && File(imageSource).existsSync()) {
       inputImage = InputImage.fromFilePath(imageSource);
     } else {
-      // Fallback: Agar path nahi hai toh bytes se process karne ki koshish karein
-      // Mobile par ML Kit File/Path ko zyada behtar handle karta hai
       debugPrint('TextRecognizer: Invalid path or source');
       return [];
     }
@@ -40,10 +41,10 @@ Future<List<Map<String, double>>> findTextRegions(
                 searchLower.contains(element.text.toLowerCase())) {
               final rect = element.boundingBox;
               found.add({
-                'xPercent': rect.left / imgWidth,
-                'yPercent': rect.top / imgHeight,
-                'wPercent': rect.width / imgWidth,
-                'hPercent': rect.height / imgHeight,
+                'xPercent': (rect.left / imgWidth).clamp(0, 1),
+                'yPercent': (rect.top / imgHeight).clamp(0, 1),
+                'wPercent': (rect.width / imgWidth).clamp(0, 1),
+                'hPercent': (rect.height / imgHeight).clamp(0, 1),
               });
             }
           }
@@ -53,6 +54,91 @@ Future<List<Map<String, double>>> findTextRegions(
     return found;
   } catch (e) {
     debugPrint('TextRecognizer Crash Prevented: $e');
+    return [];
+  }
+}
+
+/// Advanced OCR with better text detection and masking
+/// Returns TextBoxPercent objects for better masking
+Future<OCRResult> recognizeTextAdvanced(
+  dynamic imageSource,
+  int imgWidth,
+  int imgHeight,
+) async {
+  try {
+    final InputImage inputImage;
+    
+    if (imageSource is String && imageSource.isNotEmpty && File(imageSource).existsSync()) {
+      inputImage = InputImage.fromFilePath(imageSource);
+    } else {
+      return OCRResult(
+        imageId: 'unknown',
+        textBoxes: [],
+        imageWidth: imgWidth,
+        imageHeight: imgHeight,
+      );
+    }
+
+    final recognized = await _recognizer.processImage(inputImage);
+    final List<TextBox> textBoxes = [];
+
+    for (final block in recognized.blocks) {
+      for (final line in block.lines) {
+        for (final element in line.elements) {
+          final rect = element.boundingBox;
+          
+          // Calculate confidence (0-1)
+          // ML Kit doesn't give direct confidence, so we estimate from text length
+          final textLength = element.text.length;
+          final estimatedConfidence = (textLength > 0 ? 0.8 : 0.5).clamp(0, 1);
+
+          textBoxes.add(TextBox(
+            left: rect.left.toDouble(),
+            top: rect.top.toDouble(),
+            right: (rect.left + rect.width).toDouble(),
+            bottom: (rect.top + rect.height).toDouble(),
+            text: element.text,
+            confidence: estimatedConfidence,
+          ));
+        }
+      }
+    }
+
+    return OCRResult(
+      imageId: imageSource.toString(),
+      textBoxes: textBoxes,
+      imageWidth: imgWidth,
+      imageHeight: imgHeight,
+    );
+  } catch (e) {
+    debugPrint('Advanced OCR Error: $e');
+    return OCRResult(
+      imageId: imageSource.toString(),
+      textBoxes: [],
+      imageWidth: imgWidth,
+      imageHeight: imgHeight,
+    );
+  }
+}
+
+/// Find text boxes with padding applied for better masking
+Future<List<TextBoxPercent>> findTextBoxesWithPadding(
+  dynamic imageSource,
+  String searchText,
+  int imgWidth,
+  int imgHeight, {
+  double paddingPercent = 2.0,
+  double minConfidence = 0.5,
+}) async {
+  try {
+    final result = await recognizeTextAdvanced(imageSource, imgWidth, imgHeight);
+    final matches = result.findMatches(searchText, minConfidence: minConfidence);
+    
+    return matches
+        .map((box) => box.toPercent(imgWidth, imgHeight).withPadding(paddingPercent))
+        .toList();
+  } catch (e) {
+    debugPrint('Error finding text boxes: $e');
     return [];
   }
 }

@@ -55,16 +55,85 @@ class _ProcessScreenState extends State<ProcessScreen> {
       ),
       body: state.isLoading
           ? Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const CircularProgressIndicator(color: AppTheme.crimson),
-                  const SizedBox(height: 20),
-                  Text(
-                    "Processing Images: ${(state.processProgress * 100).toInt()}%",
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                ],
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    // Large circular progress indicator
+                    SizedBox(
+                      width: 120,
+                      height: 120,
+                      child: Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          CircularProgressIndicator(
+                            value: state.processProgress,
+                            strokeWidth: 6,
+                            valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.crimson),
+                            backgroundColor: Colors.white12,
+                          ),
+                          Text(
+                            "${(state.processProgress * 100).toInt()}%",
+                            style: const TextStyle(
+                              fontSize: 28,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.crimson,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 30),
+                    
+                    // Image counter
+                    Text(
+                      "Image ${state.currentProcessingImageIndex} of ${state.totalProcessingImages}",
+                      style: const TextStyle(
+                        fontSize: 18,
+                        color: Colors.white,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    
+                    // Linear progress bar
+                    SizedBox(
+                      width: 250,
+                      child: LinearProgressIndicator(
+                        value: state.processProgress,
+                        minHeight: 6,
+                        backgroundColor: Colors.white12,
+                        valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.crimson),
+                      ),
+                    ),
+                    const SizedBox(height: 25),
+                    
+                    // Status message
+                    Text(
+                      "Processing your images...",
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.white70,
+                      ),
+                    ),
+                    const SizedBox(height: 30),
+                    
+                    // Cancel button
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.transparent,
+                        side: const BorderSide(color: Colors.redAccent),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 12),
+                      ),
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text(
+                        "Cancel",
+                        style: TextStyle(color: Colors.redAccent, fontSize: 14),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             )
           : Padding(

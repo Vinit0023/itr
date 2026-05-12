@@ -22,6 +22,7 @@ class AppState extends ChangeNotifier {
 
   bool _isLoading = false;
   double _processProgress = 0.0;
+  int _currentProcessingImageIndex = 0;
 
   List<ImageRef> get receivedImages => _receivedImages;
   List<ImageRef> get processedImages => _processedImages;
@@ -29,6 +30,8 @@ class AppState extends ChangeNotifier {
   List<String> get albums => _albums;
   bool get isLoading => _isLoading;
   double get processProgress => _processProgress;
+  int get currentProcessingImageIndex => _currentProcessingImageIndex;
+  int get totalProcessingImages => _selectedImages.length;
 
   AppState() {
     _init();
@@ -104,6 +107,30 @@ class AppState extends ChangeNotifier {
   Future<void> pickFromGallery() => pickImages();
 
   // ─────────────────────────────────────────────────────────────────────────
+  // DELETE IMAGE - Preview se image remove karne ke liye
+  // ─────────────────────────────────────────────────────────────────────────
+  void removeImage(ImageRef ref) {
+    _selectedImages.removeWhere((img) => img.id == ref.id);
+    _processedImages.removeWhere((img) => img.id == ref.id);
+    _storage.deleteProcessed(ref);
+    notifyListeners();
+  }
+
+  void removeImageAt(int index) {
+    if (index >= 0 && index < _selectedImages.length) {
+      final ref = _selectedImages[index];
+      removeImage(ref);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // ADD MORE IMAGES - Preview se baad mein images add karne ke liye
+  // ─────────────────────────────────────────────────────────────────────────
+  Future<void> addMoreImages() async {
+    await pickImages();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
   // BUG FIX 2 (Phone — Auto Erase pe app crash):
   //
   // Pehle: mobile pe ImageRef.bytes == null hota hai (sirf path hota hai).
@@ -116,12 +143,14 @@ class AppState extends ChangeNotifier {
 
     _isLoading = true;
     _processProgress = 0.0;
+    _currentProcessingImageIndex = 0;
     notifyListeners();
 
     try {
       final List<ImageRef> finalResults = [];
 
       for (int i = 0; i < _selectedImages.length; i++) {
+        _currentProcessingImageIndex = i + 1;
         final ref = _selectedImages[i];
 
         // FIX: mobile pe ref.bytes null hota hai — path se read karo
@@ -194,6 +223,7 @@ class AppState extends ChangeNotifier {
       return _selectedImages;
     } finally {
       _isLoading = false;
+      _currentProcessingImageIndex = 0;
       notifyListeners();
     }
   }
