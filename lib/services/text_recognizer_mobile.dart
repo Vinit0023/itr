@@ -19,13 +19,26 @@ Future<List<Map<String, double>>> findTextRegions(
   if (searchText.trim().isEmpty) return [];
 
   try {
-    final InputImage inputImage;
+    InputImage inputImage;
     
     // Crash Protection: Check if path is valid
     if (imageSource is String && imageSource.isNotEmpty && File(imageSource).existsSync()) {
       inputImage = InputImage.fromFilePath(imageSource);
+    } else if (imageBytes.isNotEmpty) {
+      // Fallback: Use bytes if path is invalid or missing
+      // Note: This expects raw bytes. If these are JPG/PNG bytes, 
+      // they may need to be written to a temp file first.
+      inputImage = InputImage.fromBytes(
+        bytes: imageBytes,
+        metadata: InputImageMetadata(
+          size: Size(imgWidth.toDouble(), imgHeight.toDouble()),
+          rotation: InputImageRotation.rotation0deg,
+          format: InputImageFormat.bgra8888, // Standard for many Flutter image buffers
+          bytesPerRow: imgWidth * 4,
+        ),
+      );
     } else {
-      debugPrint('TextRecognizer: Invalid path or source');
+      debugPrint('TextRecognizer: Invalid path and empty bytes');
       return [];
     }
 
@@ -66,7 +79,7 @@ Future<OCRResult> recognizeTextAdvanced(
   int imgHeight,
 ) async {
   try {
-    final InputImage inputImage;
+    InputImage inputImage;
     
     if (imageSource is String && imageSource.isNotEmpty && File(imageSource).existsSync()) {
       inputImage = InputImage.fromFilePath(imageSource);

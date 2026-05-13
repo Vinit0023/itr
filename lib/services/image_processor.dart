@@ -61,8 +61,8 @@ class ImageProcessor {
           continue;
         }
 
-        // Run heavy processing off main thread
-        final processed = await compute(
+        // 1. Traditional Inpaint (Texture Fill) in Isolate
+        final isolateResult = await compute(
           _processImageInIsolate,
           _ProcessParams(
             imageBytes: srcBytes,
@@ -71,9 +71,22 @@ class ImageProcessor {
           ),
         );
 
-        if (processed != null) {
+        Uint8List? processedBytes = isolateResult != null 
+            ? Uint8List.fromList(isolateResult) 
+            : null;
+
+        // 2. LaMa API Integration (Optional Replacement/Fallback)
+        // If regions exist, we can try high-quality API inpaint
+        if (regions.isNotEmpty) {
+          final lamaResult = await _lamaEraseWithApi(srcBytes, regions);
+          if (lamaResult != null) {
+            processedBytes = lamaResult;
+          }
+        }
+
+        if (processedBytes != null) {
           final ref = await _storageService.createProcessedRef(images[i].name);
-          await _storageService.writeBytes(ref, Uint8List.fromList(processed));
+          await _storageService.writeBytes(ref, processedBytes);
           results.add(ref);
         } else {
           results.add(images[i]);
@@ -86,6 +99,20 @@ class ImageProcessor {
 
     onProgress?.call(1.0);
     return results;
+  }
+
+  /// Implementation for LaMa API Inpainting
+  Future<Uint8List?> _lamaEraseWithApi(Uint8List imageBytes, List<EraseRegion> regions) async {
+    try {
+      // TODO: 1. Generate mask image from regions
+      // TODO: 2. Call LaMa API (e.g., Replicate or custom endpoint)
+      // For now, this is a placeholder as requested.
+      // return await someApiCall(imageBytes, maskBytes);
+      return null;
+    } catch (e) {
+      debugPrint('LaMa API Error: $e');
+      return null;
+    }
   }
 
   void dispose() {}
