@@ -104,15 +104,53 @@ class ImageProcessor {
   /// Implementation for LaMa API Inpainting
   Future<Uint8List?> _lamaEraseWithApi(Uint8List imageBytes, List<EraseRegion> regions) async {
     try {
-      // TODO: 1. Generate mask image from regions
-      // TODO: 2. Call LaMa API (e.g., Replicate or custom endpoint)
+      // 1. Get dimensions
+      final srcImage = img.decodeImage(imageBytes);
+      if (srcImage == null) return null;
+      
+      final w = srcImage.width;
+      final h = srcImage.height;
+
+      // 2. Generate mask image from regions
+      final maskBytes = await _generateMask(w, h, regions);
+      
+      // TODO: 3. Call LaMa API (e.g., Replicate or custom endpoint)
       // For now, this is a placeholder as requested.
       // return await someApiCall(imageBytes, maskBytes);
-      return null;
+      
+      debugPrint('LaMa Mask generated: ${maskBytes.length} bytes for ${w}x${h} image');
+      return null; 
     } catch (e) {
       debugPrint('LaMa API Error: $e');
       return null;
     }
+  }
+
+  Future<Uint8List> _generateMask(int width, int height, List<EraseRegion> regions) async {
+    // Create black mask
+    final maskImage = img.Image(width: width, height: height);
+    img.fill(maskImage, color: img.ColorRgb8(0, 0, 0));
+
+    for (final region in regions) {
+      final x1 = (region.xPercent * width).round().clamp(0, width - 1);
+      final y1 = (region.yPercent * height).round().clamp(0, height - 1);
+      final x2 = ((region.xPercent + region.wPercent) * width).round().clamp(0, width - 1);
+      final y2 = ((region.yPercent + region.hPercent) * height).round().clamp(0, height - 1);
+
+      if (x2 > x1 && y2 > y1) {
+        // Draw white rectangle for text region
+        img.fillRect(
+          maskImage,
+          x1: x1,
+          y1: y1,
+          x2: x2,
+          y2: y2,
+          color: img.ColorRgb8(255, 255, 255),
+        );
+      }
+    }
+    // PNG is best for masks (lossless)
+    return Uint8List.fromList(img.encodePng(maskImage));
   }
 
   void dispose() {}
