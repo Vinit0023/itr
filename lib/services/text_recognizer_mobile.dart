@@ -103,7 +103,7 @@ Future<OCRResult> recognizeTextAdvanced(
           // Calculate confidence (0-1)
           // ML Kit doesn't give direct confidence, so we estimate from text length
           final textLength = element.text.length;
-          final estimatedConfidence = (textLength > 0 ? 0.8 : 0.5).clamp(0, 1);
+          final estimatedConfidence = (textLength > 0 ? 0.8 : 0.5).clamp(0, 1).toDouble();
 
           textBoxes.add(TextBox(
             left: rect.left.toDouble(),
