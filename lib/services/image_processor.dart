@@ -1,6 +1,7 @@
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
+import 'package:http/http.dart' as http;
 import 'storage_service.dart';
 
 // ── Data models ───────────────────────────────────────────────────
@@ -19,16 +20,6 @@ class EraseRegion {
   });
 }
 
-class ErasePath {
-  final List<Point<double>> points; // normalized 0..1
-  final double brushSizePercent;
-
-  ErasePath({
-    required this.points,
-    required this.brushSizePercent,
-  });
-}
-
 // ── Processor ─────────────────────────────────────────────────────
 
 class ImageProcessor {
@@ -38,12 +29,13 @@ class ImageProcessor {
 
   final _storageService = StorageService();
 
-  /// Batch erase — same regions/paths applied to ALL images.
-  /// Works on web (bytes) and mobile (file path via bytes).
+  /// Automated Batch Erase — Loops through images, applies OCR-based mask, and inpaints.
+  /// Uses Hugging Face (Free) if token provided, else falls back to local texture fill.
   Future<List<ImageRef>> batchErase(
     List<ImageRef> images, {
-    List<EraseRegion> regions = const [],
-    List<ErasePath> paths = const [],
+    required List<EraseRegion> regions,
+    int? width,
+    int? height,
     Function(double)? onProgress,
   }) async {
     final List<ImageRef> results = [];
@@ -52,35 +44,35 @@ class ImageProcessor {
       onProgress?.call(i / images.length);
 
       try {
-        // Read bytes from the ref
-        final srcBytes = images[i].bytes ??
-            await _storageService.readBytes(images[i]);
-
+        final srcBytes =
+            images[i].bytes ?? await _storageService.readBytes(images[i]);
         if (srcBytes == null) {
           results.add(images[i]);
           continue;
         }
 
-        // 1. Traditional Inpaint (Texture Fill) in Isolate
-        final isolateResult = await compute(
-          _processImageInIsolate,
-          _ProcessParams(
-            imageBytes: srcBytes,
-            regions: regions,
-            paths: paths,
-          ),
-        );
+        // 1. Try High-Quality AI Inpainting
+        Uint8List? processedBytes;
+        if (width != null && height != null) {
+          processedBytes = await _huggingFaceInpaint(srcBytes, regions, width, height);
+        } else {
+          final decoded = img.decodeImage(srcBytes);
+          if (decoded != null) {
+            processedBytes = await _huggingFaceInpaint(srcBytes, regions, decoded.width, decoded.height);
+          }
+        }
 
-        Uint8List? processedBytes = isolateResult != null 
-            ? Uint8List.fromList(isolateResult) 
-            : null;
-
-        // 2. LaMa API Integration (Optional Replacement/Fallback)
-        // If regions exist, we can try high-quality API inpaint
-        if (regions.isNotEmpty) {
-          final lamaResult = await _lamaEraseWithApi(srcBytes, regions);
-          if (lamaResult != null) {
-            processedBytes = lamaResult;
+        // 2. Fallback to Local Texture Fill Inpaint (Isolate-based, 100% Free)
+        if (processedBytes == null) {
+          debugPrint(
+            'ImageProcessor: Using local texture fill fallback for ${images[i].name}',
+          );
+          final isolateResult = await compute(
+            _processImageInIsolate,
+            _ProcessParams(imageBytes: srcBytes, regions: regions),
+          );
+          if (isolateResult != null) {
+            processedBytes = Uint8List.fromList(isolateResult);
           }
         }
 
@@ -101,44 +93,84 @@ class ImageProcessor {
     return results;
   }
 
-  /// Implementation for LaMa API Inpainting
-  Future<Uint8List?> _lamaEraseWithApi(Uint8List imageBytes, List<EraseRegion> regions) async {
-    try {
-      // 1. Get dimensions
-      final srcImage = img.decodeImage(imageBytes);
-      if (srcImage == null) return null;
-      
-      final w = srcImage.width;
-      final h = srcImage.height;
+  /// Hugging Face Serverless Inference API Implementation
+  Future<Uint8List?> _huggingFaceInpaint(
+    Uint8List imageBytes,
+    List<EraseRegion> regions,
+    int width,
+    int height,
+  ) async {
+    // IMPORTANT: Get your free token from https://huggingface.co/settings/tokens
+    const String hfToken = 'YOUR_HF_TOKEN_HERE';
+    const String modelId = 'stabilityai/stable-diffusion-2-inpainting';
 
-      // 2. Generate mask image from regions
-      final maskBytes = await _generateMask(w, h, regions);
-      
-      // TODO: 3. Call LaMa API (e.g., Replicate or custom endpoint)
-      // For now, this is a placeholder as requested.
-      // return await someApiCall(imageBytes, maskBytes);
-      
-      debugPrint('LaMa Mask generated: ${maskBytes.length} bytes for ${w}x${h} image');
-      return null; 
+    if (hfToken == 'YOUR_HF_INFERENCE_TOKEN_HERE' || regions.isEmpty) {
+      return null;
+    }
+
+    try {
+      final maskBytes = await _generateMask(
+        width,
+        height,
+        regions,
+      );
+
+      // Construct Multipart Request for HF API
+      var request = http.MultipartRequest(
+        'POST',
+        Uri.parse('https://api-inference.huggingface.co/models/$modelId'),
+      );
+
+      request.headers['Authorization'] = 'Bearer $hfToken';
+      request.files.add(
+        http.MultipartFile.fromBytes(
+          'image',
+          imageBytes,
+          filename: 'image.jpg',
+        ),
+      );
+      request.files.add(
+        http.MultipartFile.fromBytes('mask', maskBytes, filename: 'mask.png'),
+      );
+
+      final response = await request.send();
+      if (response.statusCode == 200) {
+        return await response.stream.toBytes();
+      }
+      return null;
     } catch (e) {
-      debugPrint('LaMa API Error: $e');
+      debugPrint('HF API Error: $e');
       return null;
     }
   }
 
-  Future<Uint8List> _generateMask(int width, int height, List<EraseRegion> regions) async {
-    // Create black mask
+  Future<Uint8List> _generateMask(
+    int width,
+    int height,
+    List<EraseRegion> regions,
+  ) async {
     final maskImage = img.Image(width: width, height: height);
     img.fill(maskImage, color: img.ColorRgb8(0, 0, 0));
 
     for (final region in regions) {
-      final x1 = (region.xPercent * width).round().clamp(0, width - 1);
-      final y1 = (region.yPercent * height).round().clamp(0, height - 1);
-      final x2 = ((region.xPercent + region.wPercent) * width).round().clamp(0, width - 1);
-      final y2 = ((region.yPercent + region.hPercent) * height).round().clamp(0, height - 1);
+      // Apply 2% padding as requested to ensure full text coverage
+      const padding = 0.02;
+      final x1 = ((region.xPercent - padding) * width).round().clamp(
+        0,
+        width - 1,
+      );
+      final y1 = ((region.yPercent - padding) * height).round().clamp(
+        0,
+        height - 1,
+      );
+      final x2 = ((region.xPercent + region.wPercent + padding) * width)
+          .round()
+          .clamp(0, width - 1);
+      final y2 = ((region.yPercent + region.hPercent + padding) * height)
+          .round()
+          .clamp(0, height - 1);
 
       if (x2 > x1 && y2 > y1) {
-        // Draw white rectangle for text region
         img.fillRect(
           maskImage,
           x1: x1,
@@ -149,7 +181,6 @@ class ImageProcessor {
         );
       }
     }
-    // PNG is best for masks (lossless)
     return Uint8List.fromList(img.encodePng(maskImage));
   }
 
@@ -161,13 +192,8 @@ class ImageProcessor {
 class _ProcessParams {
   final Uint8List imageBytes;
   final List<EraseRegion> regions;
-  final List<ErasePath> paths;
 
-  _ProcessParams({
-    required this.imageBytes,
-    required this.regions,
-    required this.paths,
-  });
+  _ProcessParams({required this.imageBytes, required this.regions});
 }
 
 // ── Isolate function ──────────────────────────────────────────────
@@ -184,8 +210,14 @@ List<int>? _processImageInIsolate(_ProcessParams params) {
     for (final region in params.regions) {
       final x1 = (region.xPercent * w).round().clamp(0, w - 1);
       final y1 = (region.yPercent * h).round().clamp(0, h - 1);
-      final x2 = ((region.xPercent + region.wPercent) * w).round().clamp(0, w - 1);
-      final y2 = ((region.yPercent + region.hPercent) * h).round().clamp(0, h - 1);
+      final x2 = ((region.xPercent + region.wPercent) * w).round().clamp(
+        0,
+        w - 1,
+      );
+      final y2 = ((region.yPercent + region.hPercent) * h).round().clamp(
+        0,
+        h - 1,
+      );
 
       if (x2 > x1 && y2 > y1) {
         final expandX = ((x2 - x1) * 0.1).round();
@@ -201,68 +233,10 @@ List<int>? _processImageInIsolate(_ProcessParams params) {
       }
     }
 
-    // Freehand paths (from draw screen)
-    for (final path in params.paths) {
-      if (path.points.isEmpty) continue;
-      final brushSize = path.brushSizePercent;
-
-      double minX = 1.0, minY = 1.0, maxX = 0.0, maxY = 0.0;
-      for (final p in path.points) {
-        minX = min(minX, p.x - brushSize);
-        minY = min(minY, p.y - brushSize);
-        maxX = max(maxX, p.x + brushSize);
-        maxY = max(maxY, p.y + brushSize);
-      }
-
-      final x1 = (minX * w).round().clamp(0, w - 1);
-      final y1 = (minY * h).round().clamp(0, h - 1);
-      final x2 = (maxX * w).round().clamp(0, w - 1);
-      final y2 = (maxY * h).round().clamp(0, h - 1);
-
-      bool inMask(int px, int py) {
-        final fx = px / w;
-        final fy = py / h;
-        for (int i = 0; i < path.points.length - 1; i++) {
-          if (_distToSegment(
-                Point(fx, fy),
-                path.points[i],
-                path.points[i + 1],
-              ) <=
-              brushSize) {
-            return true;
-          }
-        }
-        if (path.points.length == 1) {
-          return _dist(Point(fx, fy), path.points.first) <= brushSize;
-        }
-        return false;
-      }
-
-      if (x2 > x1 && y2 > y1) {
-        _textureFillInpaint(srcImage, x1, y1, x2, y2, inMask);
-      }
-    }
-
     return img.encodeJpg(srcImage, quality: 95);
   } catch (_) {
     return null;
   }
-}
-
-// ── Math helpers ──────────────────────────────────────────────────
-
-double _dist(Point<double> a, Point<double> b) {
-  final dx = a.x - b.x;
-  final dy = a.y - b.y;
-  return sqrt(dx * dx + dy * dy);
-}
-
-double _distToSegment(Point<double> p, Point<double> v, Point<double> w) {
-  final l2 = _dist(v, w) * _dist(v, w);
-  if (l2 == 0) return _dist(p, v);
-  var t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
-  t = t.clamp(0.0, 1.0);
-  return _dist(p, Point(v.x + t * (w.x - v.x), v.y + t * (w.y - v.y)));
 }
 
 // ── Inpainting ────────────────────────────────────────────────────
@@ -409,9 +383,18 @@ void _textureFillInpaint(
         x,
         y,
         img.ColorRgb8(
-          (bufR[by][bx] * alpha + orig.r.toInt() * (1 - alpha)).round().clamp(0, 255),
-          (bufG[by][bx] * alpha + orig.g.toInt() * (1 - alpha)).round().clamp(0, 255),
-          (bufB[by][bx] * alpha + orig.b.toInt() * (1 - alpha)).round().clamp(0, 255),
+          (bufR[by][bx] * alpha + orig.r.toInt() * (1 - alpha)).round().clamp(
+            0,
+            255,
+          ),
+          (bufG[by][bx] * alpha + orig.g.toInt() * (1 - alpha)).round().clamp(
+            0,
+            255,
+          ),
+          (bufB[by][bx] * alpha + orig.b.toInt() * (1 - alpha)).round().clamp(
+            0,
+            255,
+          ),
         ),
       );
     }

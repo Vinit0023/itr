@@ -138,6 +138,10 @@ class AppState extends ChangeNotifier {
   //
   // Fix: pehle bytes load karo path se agar memory mein nahi hain.
   // ─────────────────────────────────────────────────────────────────────────
+  /// Unified Automated Erase Loop
+  /// 1. Detect Text (Google ML Kit)
+  /// 2. Construct Mask (Dynamic UI Canvas logic in ImageProcessor)
+  /// 3. Inpaint (Hugging Face or Local Texture Fill)
   Future<List<ImageRef>> batchErase(String searchText) async {
     if (_selectedImages.isEmpty || searchText.trim().isEmpty) return [];
 
@@ -153,25 +157,19 @@ class AppState extends ChangeNotifier {
         _currentProcessingImageIndex = i + 1;
         final ref = _selectedImages[i];
 
-        // FIX: mobile pe ref.bytes null hota hai — path se read karo
-        Uint8List? imageBytes = ref.bytes;
-        if (imageBytes == null && ref.path != null) {
-          imageBytes = await _storage.readBytes(ref);
-        }
-
+        // 1. Load Bytes
+        Uint8List? imageBytes = ref.bytes ?? await _storage.readBytes(ref);
         if (imageBytes == null) {
-          debugPrint('batchErase: no bytes for ${ref.name}, skipping');
           finalResults.add(ref);
-          _processProgress = (i + 1) / _selectedImages.length;
-          notifyListeners();
           continue;
         }
 
-        // FIX: imageBytes use karo, ref.bytes! nahi — crash avoid
-        final ui.Image decoded = await ui
-            .instantiateImageCodec(imageBytes)
-            .then((c) => c.getNextFrame().then((f) => f.image));
+        // 2. Safe decoding for dimensions
+        final ui.Codec codec = await ui.instantiateImageCodec(imageBytes);
+        final ui.FrameInfo fi = await codec.getNextFrame();
+        final ui.Image decoded = fi.image;
 
+        // 3. Detect Regions (ML Kit - FREE)
         final regions = await _textRecognizer.findTextRegions(
           kIsWeb ? ref : ref.path,
           imageBytes,
@@ -181,7 +179,7 @@ class AppState extends ChangeNotifier {
         );
 
         if (regions.isNotEmpty) {
-          // FIX: bytes attach karo ref mein taaki processor ke paas data ho
+          // 4. Automated Process (HF API or Local)
           final refWithBytes = ImageRef(
             id: ref.id,
             name: ref.name,
@@ -189,18 +187,17 @@ class AppState extends ChangeNotifier {
             bytes: imageBytes,
             createdAt: ref.createdAt,
           );
+          
           final processed = await _imageProcessor.batchErase(
             [refWithBytes],
-            regions: regions
-                .map(
-                  (r) => EraseRegion(
-                    xPercent: r['xPercent']!,
-                    yPercent: r['yPercent']!,
-                    wPercent: r['wPercent']!,
-                    hPercent: r['hPercent']!,
-                  ),
-                )
-                .toList(),
+            width: decoded.width,
+            height: decoded.height,
+            regions: regions.map((r) => EraseRegion(
+              xPercent: r['xPercent'] ?? 0.0,
+              yPercent: r['yPercent'] ?? 0.0,
+              wPercent: r['wPercent'] ?? 0.0,
+              hPercent: r['hPercent'] ?? 0.0,
+            )).toList(),
           );
           finalResults.addAll(processed);
         } else {
@@ -211,6 +208,7 @@ class AppState extends ChangeNotifier {
         notifyListeners();
       }
 
+      // Finalize
       for (var res in finalResults) {
         _storage.addProcessed(res);
       }
@@ -219,11 +217,10 @@ class AppState extends ChangeNotifier {
 
       return finalResults;
     } catch (e) {
-      debugPrint("Batch Erase Error: $e");
+      debugPrint("Automated Erase Error: $e");
       return _selectedImages;
     } finally {
       _isLoading = false;
-      _currentProcessingImageIndex = 0;
       notifyListeners();
     }
   }

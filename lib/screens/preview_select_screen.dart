@@ -252,36 +252,21 @@ class _PreviewSelectScreenState extends State<PreviewSelectScreen> {
                   top: false,
                   child: Column(
                     children: [
-                      // Auto erase button (if hint given)
-                      if (_hintController.text.trim().isNotEmpty)
-                        SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton.icon(
-                            icon: const Icon(Icons.auto_fix_high, size: 18),
-                            label: Text('Auto Erase "${_hintController.text.trim()}"'),
-                            onPressed: state.selectedImages.isEmpty
-                                ? null
-                                : () => _handleAutoErase(context, state),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppTheme.crimson,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                            ),
-                          ),
-                        ),
-                      if (_hintController.text.trim().isNotEmpty) const SizedBox(height: 10),
-                      // Manual draw button
+                      // Automated erase button
                       SizedBox(
                         width: double.infinity,
-                        child: OutlinedButton.icon(
-                          icon: const Icon(Icons.brush_outlined, size: 18),
-                          label: const Text('Manual Draw & Erase'),
-                          onPressed: state.selectedImages.isEmpty
+                        child: ElevatedButton.icon(
+                          icon: const Icon(Icons.auto_fix_high, size: 18),
+                          label: Text(_hintController.text.trim().isEmpty 
+                              ? 'Enter text to start' 
+                              : 'Auto Erase "${_hintController.text.trim()}"'),
+                          onPressed: (_hintController.text.trim().isEmpty || state.selectedImages.isEmpty)
                               ? null
-                              : () => Navigator.pushNamed(context, '/process'),
-                          style: OutlinedButton.styleFrom(
+                              : () => _handleAutoErase(context, state),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppTheme.crimson,
+                            foregroundColor: Colors.white,
                             padding: const EdgeInsets.symmetric(vertical: 14),
-                            side: BorderSide(color: AppTheme.cardBorder),
                           ),
                         ),
                       ),
@@ -300,13 +285,9 @@ class _PreviewSelectScreenState extends State<PreviewSelectScreen> {
   Future<void> _handleAutoErase(BuildContext context, AppState state) async {
     final text = _hintController.text.trim();
     FocusScope.of(context).unfocus();
-    final navigator = Navigator.of(context);
-
-    await state.autoSearchAndErase(text);
-
-    if (mounted) {
-      navigator.pushReplacementNamed('/preview');
-    }
+    
+    // Navigate to ProcessScreen first, it will handle the state.batchErase call
+    Navigator.pushNamed(context, '/process', arguments: text);
   }
 
   void _viewImage(BuildContext context, ImageRef ref) {

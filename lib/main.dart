@@ -24,10 +24,7 @@ void main() {
   );
 
   runApp(
-    ChangeNotifierProvider(
-      create: (_) => AppState(),
-      child: const ITRApp(),
-    ),
+    ChangeNotifierProvider(create: (_) => AppState(), child: const ITRApp()),
   );
 }
 

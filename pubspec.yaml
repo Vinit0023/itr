@@ -29,6 +29,7 @@ dependencies:
 
   # ── Web only ──────────────────────────────────────────────────
   web: ^1.0.0           # modern replacement for dart:html
+  http: ^1.6.0
 
 dev_dependencies:
   flutter_test:

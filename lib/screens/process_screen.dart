@@ -11,34 +11,34 @@ class ProcessScreen extends StatefulWidget {
 }
 
 class _ProcessScreenState extends State<ProcessScreen> {
-  final TextEditingController _textController = TextEditingController();
+  bool _hasStarted = false;
 
   @override
-  void dispose() {
-    _textController.dispose();
-    super.dispose();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_hasStarted) {
+      _hasStarted = true;
+      final searchText = ModalRoute.of(context)?.settings.arguments as String?;
+      if (searchText != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _startProcessing(searchText);
+        });
+      }
+    }
   }
 
-  Future<void> _handleAutoErase(AppState state) async {
-    final text = _textController.text.trim();
-    if (text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Please enter text to erase")),
-      );
-      return;
-    }
-
-    // Start processing
+  Future<void> _startProcessing(String text) async {
+    final state = Provider.of<AppState>(context, listen: false);
     final results = await state.batchErase(text);
 
     if (mounted) {
       if (results.isNotEmpty) {
-        // Navigate to Preview Screen after success
-        Navigator.pushNamed(context, '/preview');
+        Navigator.pushReplacementNamed(context, '/preview');
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("No matching text found in images")),
+          const SnackBar(content: Text("No matching text found")),
         );
+        Navigator.pop(context);
       }
     }
   }
@@ -49,127 +49,95 @@ class _ProcessScreenState extends State<ProcessScreen> {
 
     return Scaffold(
       backgroundColor: AppTheme.bgDeep,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        title: const Text("Auto Erase"),
-      ),
-      body: state.isLoading
-          ? Center(
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
+      body: Center(
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              // Large circular progress indicator
+              SizedBox(
+                width: 140,
+                height: 140,
+                child: Stack(
+                  alignment: Alignment.center,
                   children: [
-                    // Large circular progress indicator
-                    SizedBox(
-                      width: 120,
-                      height: 120,
-                      child: Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          CircularProgressIndicator(
-                            value: state.processProgress,
-                            strokeWidth: 6,
-                            valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.crimson),
-                            backgroundColor: Colors.white12,
+                    CircularProgressIndicator(
+                      value: state.processProgress,
+                      strokeWidth: 8,
+                      valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.crimson),
+                      backgroundColor: Colors.white12,
+                    ),
+                    Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          "${(state.processProgress * 100).toInt()}%",
+                          style: const TextStyle(
+                            fontSize: 32,
+                            fontWeight: FontWeight.bold,
+                            color: AppTheme.crimson,
                           ),
-                          Text(
-                            "${(state.processProgress * 100).toInt()}%",
-                            style: const TextStyle(
-                              fontSize: 28,
-                              fontWeight: FontWeight.bold,
-                              color: AppTheme.crimson,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 30),
-                    
-                    // Image counter
-                    Text(
-                      "Image ${state.currentProcessingImageIndex} of ${state.totalProcessingImages}",
-                      style: const TextStyle(
-                        fontSize: 18,
-                        color: Colors.white,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    
-                    // Linear progress bar
-                    SizedBox(
-                      width: 250,
-                      child: LinearProgressIndicator(
-                        value: state.processProgress,
-                        minHeight: 6,
-                        backgroundColor: Colors.white12,
-                        valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.crimson),
-                      ),
-                    ),
-                    const SizedBox(height: 25),
-                    
-                    // Status message
-                    Text(
-                      "Processing your images...",
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.white70,
-                      ),
-                    ),
-                    const SizedBox(height: 30),
-                    
-                    // Cancel button
-                    ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.transparent,
-                        side: const BorderSide(color: Colors.redAccent),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                        padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 12),
-                      ),
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text(
-                        "Cancel",
-                        style: TextStyle(color: Colors.redAccent, fontSize: 14),
-                      ),
+                        ),
+                        const Text(
+                          "DONE",
+                          style: TextStyle(fontSize: 10, letterSpacing: 2, color: Colors.white54),
+                        ),
+                      ],
                     ),
                   ],
                 ),
               ),
-            )
-          : Padding(
-              padding: const EdgeInsets.all(20.0),
-              child: Column(
-                children: [
-                  TextField(
-                    controller: _textController,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      hintText: "Enter details (e.g. 569872)",
-                      hintStyle: const TextStyle(color: Colors.white54),
-                      filled: true,
-                      fillColor: AppTheme.cardBg,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: AppTheme.cardBorder),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 30),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 55,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppTheme.maroon,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      ),
-                      onPressed: () => _handleAutoErase(state),
-                      child: const Text("Auto Erase & Preview", style: TextStyle(fontSize: 16, color: Colors.white)),
-                    ),
-                  ),
-                ],
+              const SizedBox(height: 40),
+              
+              // Image counter
+              Text(
+                "Processing Image ${state.currentProcessingImageIndex}",
+                style: const TextStyle(
+                  fontSize: 20,
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
-            ),
+              Text(
+                "of ${state.totalProcessingImages} total",
+                style: const TextStyle(fontSize: 14, color: Colors.white54),
+              ),
+              const SizedBox(height: 24),
+              
+              // Linear progress bar
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 40),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: LinearProgressIndicator(
+                    value: state.processProgress,
+                    minHeight: 8,
+                    backgroundColor: Colors.white12,
+                    valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.crimson),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 40),
+              
+              const Text(
+                "AI is cleaning your images...",
+                style: TextStyle(fontSize: 15, color: Colors.white70, fontStyle: FontStyle.italic),
+              ),
+              const SizedBox(height: 40),
+              
+              // Cancel button
+              TextButton.icon(
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.close, size: 18, color: Colors.redAccent),
+                label: const Text(
+                  "Cancel Processing",
+                  style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
-}
+}

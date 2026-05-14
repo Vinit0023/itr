@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import 'package:path_provider/path_provider.dart';
 import '../models/ocr_models.dart';
 
 final _recognizer = TextRecognizer(script: TextRecognitionScript.latin);
@@ -21,24 +22,18 @@ Future<List<Map<String, double>>> findTextRegions(
   try {
     InputImage inputImage;
     
-    // Crash Protection: Check if path is valid
+    // Crash Protection: Ensure we always have a valid file path for ML Kit
     if (imageSource is String && imageSource.isNotEmpty && File(imageSource).existsSync()) {
       inputImage = InputImage.fromFilePath(imageSource);
     } else if (imageBytes.isNotEmpty) {
-      // Fallback: Use bytes if path is invalid or missing
-      // Note: This expects raw bytes. If these are JPG/PNG bytes, 
-      // they may need to be written to a temp file first.
-      inputImage = InputImage.fromBytes(
-        bytes: imageBytes,
-        metadata: InputImageMetadata(
-          size: Size(imgWidth.toDouble(), imgHeight.toDouble()),
-          rotation: InputImageRotation.rotation0deg,
-          format: InputImageFormat.bgra8888, // Standard for many Flutter image buffers
-          bytesPerRow: imgWidth * 4,
-        ),
-      );
+      // JPG/PNG bytes cannot be passed directly to InputImage.fromBytes (which expects raw buffers)
+      // We must write them to a temp file first.
+      final tempDir = await getTemporaryDirectory();
+      final tempFile = File('${tempDir.path}/temp_ocr_${DateTime.now().millisecondsSinceEpoch}.jpg');
+      await tempFile.writeAsBytes(imageBytes);
+      inputImage = InputImage.fromFilePath(tempFile.path);
     } else {
-      debugPrint('TextRecognizer: Invalid path and empty bytes');
+      debugPrint('TextRecognizer: No image source available');
       return [];
     }
 
